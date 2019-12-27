@@ -4,6 +4,8 @@ import tensorflow as tf
 import model
 import numpy as np
 import os
+import math
+from queue import Queue
 from datetime import datetime
 
 
@@ -28,6 +30,7 @@ class Worker(threading.Thread):
     global_episode = 0
     global_average_running_reward = 0
     best_score = 0
+    best_checkpoint_score = 0
     save_lock = threading.Lock()
 
     def __init__(self,
@@ -37,6 +40,8 @@ class Worker(threading.Thread):
                  max_episodes,
                  optimizer,
                  update_frequency,
+                 num_checkpoints,
+                 reward_queue,
                  save_dir):
         super(Worker, self).__init__()
         self.worker_index = worker_index
@@ -47,16 +52,28 @@ class Worker(threading.Thread):
         self.max_episodes = max_episodes
         self.optimizer = optimizer
         self.update_frequency = update_frequency
+        self.episodes_per_checkpoint = int(max_episodes / num_checkpoints)
+        self.reward_queue = reward_queue
         self.save_dir = save_dir
         os.makedirs(save_dir, exist_ok=True)
         self.global_network = global_network
         self.local_network = model.A3CNetwork(self.state_space, self.action_space)
+
+    def _save_global_weights(self, filename):
+        with Worker.save_lock:
+            self.global_network.save_weights(
+                os.path.join(
+                    self.save_dir,
+                    filename
+                )
+            )
 
     def run(self):
         history = History()
         update_counter = 0
         ep_reward = 0
         while Worker.global_episode < self.max_episodes:
+            print(f"Starting global episode: {Worker.global_episode}")
             current_state = self.env.reset()
             history.clear()
 
@@ -77,9 +94,9 @@ class Worker(threading.Thread):
                 if update_counter == self.update_frequency or done:
                     with tf.GradientTape() as tape:
                         local_loss = self.local_network.get_loss(done, new_state, history)
-                    local_gradients = tape.gradient(local_loss, self.local_network.trainable_variables)
+                    local_gradients = tape.gradient(local_loss, self.local_network.trainable_weights)
                     self.optimizer.apply_gradients(
-                        zip(local_gradients, self.global_network.trainable_variables)
+                        zip(local_gradients, self.global_network.trainable_weights)
                     )
                     self.local_network.set_weights(self.global_network.get_weights())
 
@@ -88,20 +105,36 @@ class Worker(threading.Thread):
 
                 update_counter += 1
                 current_state = new_state
+            print(f"Checkpoint global episode: {Worker.global_episode}")
+            print(f"Episodes per checkpoint: {self.episodes_per_checkpoint}")
+            print(f"Current Checkpoint: {int(Worker.global_episode / self.episodes_per_checkpoint)}")
+            current_checkpoint = int(Worker.global_episode / self.episodes_per_checkpoint)
+            checkpoint_path = os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")
+            if ep_reward >= Worker.best_checkpoint_score:
+                if ep_reward >= Worker.best_score:
+                    print(f"New global best score of {ep_reward} achieved by Worker {self.name}!")
+                    self._save_global_weights('checkpoint_best.h5')
+                    print(f"Saved global best model at: {os.path.join(self.save_dir, 'checkpoint_best.h5')}")
+                    Worker.best_score = ep_reward
+                print(f"New checkpoint best score of {ep_reward} achieved by Worker {self.name}!")
+                self._save_global_weights(f"checkpoint_{current_checkpoint}.h5")
+                print(f"Saved checkpoint best model at: {checkpoint_path}")
+                Worker.best_checkpoint_score = ep_reward
 
-            if ep_reward > Worker.best_score:
-                print(f"New best score of {ep_reward} achieved by Worker {self.name}!")
-                with Worker.save_lock:
-                    self.global_network.save_weights(
-                        os.path.join(
-                            self.save_dir,
-                            'best_model.h5'
-                        )
-                    )
-                    print(f"Saved best model at: {os.path.join(self.save_dir, 'best_model.h5')}")
-                Worker.best_score = ep_reward
+            if not os.path.exists(checkpoint_path):
+                self._save_global_weights(f"checkpoint_{current_checkpoint}.h5")
+                Worker.best_checkpoint_score = 0
+
+            if Worker.global_average_running_reward == 0:
+                Worker.global_average_running_reward = ep_reward
+            else:
+                Worker.global_average_running_reward = Worker.global_average_running_reward * 0.99 + ep_reward * 0.01
+            self.reward_queue.put(Worker.global_average_running_reward)
             ep_reward = 0
             Worker.global_episode += 1
+        self.reward_queue.put(None)
+
+
 
 
 class TestWorker(threading.Thread):
@@ -109,7 +142,7 @@ class TestWorker(threading.Thread):
                  global_network,
                  gym_game_name,
                  max_episodes,
-                 test_dir,
+                 test_file_name,
                  render=True):
         super(TestWorker, self).__init__()
         self.global_network = global_network
@@ -118,8 +151,7 @@ class TestWorker(threading.Thread):
         self.state_space = self.env.observation_space.shape[0]
         self.action_space = self.env.action_space.n
         self.max_episodes = max_episodes
-        self.test_dir = test_dir
-        os.makedirs(test_dir, exist_ok=True)
+        self.test_file_name = test_file_name
         self.render = render
 
     def run(self):
@@ -131,11 +163,12 @@ class TestWorker(threading.Thread):
             ep_reward = 0
             done = False
             while not done:
-                self.env.render()
+                if self.render:
+                    self.env.render()
                 action_log_prob, _ = self.global_network(
                     tf.convert_to_tensor(current_state[None, :], dtype=tf.float32)
                 )
-                action_prob = tf.nn.softmax(tf.squeeze(action_log_prob)).numpy()
+                action_prob = tf.nn.softmax(tf.squeeze(action_log_prob)).numpy() + 1e-9
                 action = np.random.choice(self.action_space, p=action_prob)
                 new_state, reward, done, _ = self.env.step(action)
 
@@ -149,7 +182,8 @@ class TestWorker(threading.Thread):
             average_reward += ep_reward
             episode += 1
         average_reward /= self.max_episodes
-        with open(self._get_filepath(), "w+") as fp:
-            fp.write(f"Best Reward: {best_reward}\n")
-            fp.write(f"Average Reward: {average_reward}\n")
+        if self.test_file_name:
+            with open(self.test_file_name, "w+") as fp:
+                fp.write(f"Best Reward: {best_reward}\n")
+                fp.write(f"Average Reward: {average_reward}\n")
 

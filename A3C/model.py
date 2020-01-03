@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras import layers
+from tensorflow.keras import layers, initializers
 from collections import deque
 
 
@@ -13,10 +13,12 @@ class A3CNetwork(tf.keras.Model):
         self.entropy_coefficient = entropy_coefficient
 
         # self.dense_shared_1 = layers.Dense(100, activation='relu')
-        self.dense_value_hidden = layers.Dense(100, activation='relu')
-        self.dense_critic_hidden = layers.Dense(100, activation='relu')
-        self.policy_log_odds = layers.Dense(self.action_space)
-        self.value = layers.Dense(1)
+        self.dense_value_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
+                                               kernel_initializer=initializers.glorot_uniform)
+        self.dense_critic_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
+                                                kernel_initializer=initializers.glorot_uniform)
+        self.policy_log_odds = layers.Dense(self.action_space, kernel_initializer=initializers.glorot_uniform)
+        self.value = layers.Dense(1, kernel_initializer=initializers.glorot_uniform)
         # Initialize network weights with random input
         self(tf.convert_to_tensor(np.random.random((1, self.state_space)), dtype=tf.float32))
 

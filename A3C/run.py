@@ -15,13 +15,14 @@ from queue import Queue
 @click.option('--env_name', type=str, default='CartPole-v0')
 @click.option('--num_workers', type=int, default=1)
 @click.option('--max_episodes', type=int, default=100)
-@click.option('--learning_rate', type=float, default=1e-3)
+@click.option('--learning_rate', type=float, default=10e-4)
 @click.option('--network_update_frequency', type=int, default=50)
 @click.option('--num_checkpoints', type=int, default=10)
 @click.option('--model_directory', type=click.Path(), default="")
 @click.option('--test_model', type=bool, default=True)
 @click.option('--test_episodes', type=int, default=100)
 @click.option('--render_testing', type=bool, default=False)
+@click.option('--save', type=bool, default=True)
 def run_training(
         env_name,
         num_workers,
@@ -32,7 +33,8 @@ def run_training(
         model_directory,
         test_model,
         test_episodes,
-        render_testing):
+        render_testing,
+        save):
 
     env = gym.make(env_name)
     state_space = env.observation_space.shape[0]
@@ -47,7 +49,8 @@ def run_training(
             "./experiment/",
             f"{env_name}_{datetime.now()}"
         )
-    os.makedirs(model_directory, exist_ok=True)
+    if save:
+        os.makedirs(model_directory, exist_ok=True)
 
     reward_queue = Queue()
     optimizer = tf.optimizers.RMSprop(learning_rate)
@@ -61,7 +64,8 @@ def run_training(
             network_update_frequency,
             num_checkpoints,
             reward_queue,
-            model_directory
+            model_directory,
+            save
         ) for worker_index in range(num_workers)
     ]
     start_time = time()
@@ -83,43 +87,44 @@ def run_training(
     end_time = time()
     time_taken = end_time - start_time
 
-    write_summary(model_directory,
-                  num_workers,
-                  max_episodes,
-                  learning_rate,
-                  network_update_frequency,
-                  time_taken,
-                  filename="summary.txt")
-    plt.plot(moving_average_rewards)
-    plt.ylabel('Moving average reward')
-    plt.xlabel('Episode')
-    plt.savefig(os.path.join(model_directory, 'Moving_Average.png'))
+    if save:
+        write_summary(model_directory,
+                      num_workers,
+                      max_episodes,
+                      learning_rate,
+                      network_update_frequency,
+                      time_taken,
+                      filename="summary.txt")
+        plt.plot(moving_average_rewards)
+        plt.ylabel('Moving average reward')
+        plt.xlabel('Episode')
+        plt.savefig(os.path.join(model_directory, 'Moving_Average.png'))
 
-    if test_model:
-        test_dir = os.path.join(model_directory, "test")
-        os.makedirs(test_dir)
-        print("Running tests with checkpoint policies...")
-        for checkpoint in tqdm(range(num_checkpoints + 1)):
-            if checkpoint == num_checkpoints:
-                checkpoint = "best"
+        if test_model:
+            test_dir = os.path.join(model_directory, "test")
+            os.makedirs(test_dir)
+            print("Running tests with checkpoint policies...")
+            for checkpoint in tqdm(range(num_checkpoints + 1)):
+                if checkpoint == num_checkpoints:
+                    checkpoint = "best"
 
-            model_file_path = os.path.join(
-                model_directory,
-                f"checkpoint_{checkpoint}.h5"
-            )
+                model_file_path = os.path.join(
+                    model_directory,
+                    f"checkpoint_{checkpoint}.h5"
+                )
 
-            test_file_path = os.path.join(
-                test_dir,
-                f"test_checkpoint_{checkpoint}.txt"
-            )
+                test_file_path = os.path.join(
+                    test_dir,
+                    f"test_checkpoint_{checkpoint}.txt"
+                )
 
-            run_testing(
-                env_name,
-                test_episodes,
-                model_file_path,
-                test_file_path,
-                render_testing
-            )
+                run_testing(
+                    env_name,
+                    test_episodes,
+                    model_file_path,
+                    test_file_path,
+                    render_testing
+                )
 
 
 def run_testing(

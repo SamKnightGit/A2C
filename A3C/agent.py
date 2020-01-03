@@ -32,6 +32,7 @@ class Worker(threading.Thread):
     best_score = 0
     best_checkpoint_score = 0
     save_lock = threading.Lock()
+    checkpoint_lock = threading.Lock()
 
     def __init__(self,
                  worker_index,
@@ -42,7 +43,8 @@ class Worker(threading.Thread):
                  update_frequency,
                  num_checkpoints,
                  reward_queue,
-                 save_dir):
+                 save_dir,
+                 save=True):
         super(Worker, self).__init__()
         self.worker_index = worker_index
         self.name = f"Worker_{worker_index}"
@@ -55,25 +57,42 @@ class Worker(threading.Thread):
         self.episodes_per_checkpoint = int(max_episodes / num_checkpoints)
         self.reward_queue = reward_queue
         self.save_dir = save_dir
-        os.makedirs(save_dir, exist_ok=True)
+        self.save = save
+        if save:
+            os.makedirs(save_dir, exist_ok=True)
         self.global_network = global_network
         self.local_network = model.A3CNetwork(self.state_space, self.action_space)
 
+        self.gradients = []
+
+    def _save_gradients(self, file_path):
+        if self.save:
+            np.save(file_path, self.gradients)
+            self.gradients = []
+
     def _save_global_weights(self, filename):
-        with Worker.save_lock:
-            self.global_network.save_weights(
-                os.path.join(
-                    self.save_dir,
-                    filename
+        if self.save:
+            with Worker.save_lock:
+                self.global_network.save_weights(
+                    os.path.join(
+                        self.save_dir,
+                        filename
+                    )
                 )
-            )
+
+    def _get_next_episode(self):
+        with Worker.checkpoint_lock:
+            episode = Worker.global_episode
+            Worker.global_episode += 1
+        return episode
 
     def run(self):
         history = History()
         update_counter = 0
         ep_reward = 0
-        while Worker.global_episode < self.max_episodes:
-            print(f"Starting global episode: {Worker.global_episode}")
+        global_episode = self._get_next_episode()
+        while global_episode < self.max_episodes:
+            print(f"Starting global episode: {global_episode}")
             current_state = self.env.reset()
             history.clear()
 
@@ -95,6 +114,8 @@ class Worker(threading.Thread):
                     with tf.GradientTape() as tape:
                         local_loss = self.local_network.get_loss(done, new_state, history)
                     local_gradients = tape.gradient(local_loss, self.local_network.trainable_weights)
+                    if self.worker_index == 0:
+                        self.gradients.append(local_gradients)
                     self.optimizer.apply_gradients(
                         zip(local_gradients, self.global_network.trainable_weights)
                     )
@@ -105,11 +126,10 @@ class Worker(threading.Thread):
 
                 update_counter += 1
                 current_state = new_state
-            print(f"Checkpoint global episode: {Worker.global_episode}")
-            print(f"Episodes per checkpoint: {self.episodes_per_checkpoint}")
-            print(f"Current Checkpoint: {int(Worker.global_episode / self.episodes_per_checkpoint)}")
-            current_checkpoint = int(Worker.global_episode / self.episodes_per_checkpoint)
+
+            current_checkpoint = int(global_episode / self.episodes_per_checkpoint)
             checkpoint_path = os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")
+            gradient_path = os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}_gradients")
             if ep_reward >= Worker.best_checkpoint_score:
                 if ep_reward >= Worker.best_score:
                     print(f"New global best score of {ep_reward} achieved by Worker {self.name}!")
@@ -125,13 +145,17 @@ class Worker(threading.Thread):
                 self._save_global_weights(f"checkpoint_{current_checkpoint}.h5")
                 Worker.best_checkpoint_score = 0
 
+            if self.worker_index == 0 and (not os.path.exists(gradient_path)):
+                self._save_gradients(gradient_path)
+
             if Worker.global_average_running_reward == 0:
                 Worker.global_average_running_reward = ep_reward
             else:
                 Worker.global_average_running_reward = Worker.global_average_running_reward * 0.99 + ep_reward * 0.01
             self.reward_queue.put(Worker.global_average_running_reward)
             ep_reward = 0
-            Worker.global_episode += 1
+            global_episode = self._get_next_episode()
+
         self.reward_queue.put(None)
 
 

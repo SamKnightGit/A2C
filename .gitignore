@@ -1,8 +1,8 @@
 # Project-specific ignores
 .idea/
-train
-test/
+train/
 experiment/
+.vscode/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

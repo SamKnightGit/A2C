@@ -2,14 +2,17 @@ import gym
 import agent
 import model
 import os
+import multiprocessing
 import tensorflow as tf
 import numpy as np
 import click
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import datetime
 from time import time, sleep
 from tqdm import tqdm
-from queue import Queue
+from queue import Queue, Empty
+
+NUM_CORES = multiprocessing.cpu_count()
 
 
 @click.command()
@@ -42,6 +45,7 @@ def run_training(
         render_testing,
         random_seed,
         save):
+
     env = gym.make(env_name)
     state_space = env.observation_space.shape[0]
     action_space = env.action_space.n
@@ -53,8 +57,7 @@ def run_training(
 
     global_network = model.A3CNetwork(
         state_space=state_space,
-        action_space=action_space,
-        entropy_coefficient=entropy_coefficient
+        action_space=action_space
     )
 
     if not model_directory:
@@ -65,21 +68,54 @@ def run_training(
     if save:
         os.makedirs(model_directory, exist_ok=True)
 
-    reward_queue = Queue()
+    if num_workers > NUM_CORES:
+        print("Number of workers cannot exceed number of CPU cores.")
+        print(f"Falling back on maximum number of workers: {NUM_CORES}")
+        num_workers = NUM_CORES
+
+    reward_queue = multiprocessing.Queue()
+    gradients_queue = multiprocessing.Queue()
+
+    weights = global_network.get_weights()
+    flat_weights = []
+    weights_shape = []
+    for layer in weights:
+        weights_shape.append(layer.shape)
+        flat_weights += np.ravel(layer).tolist()
+
+    global_network_weights = multiprocessing.Array("d", flat_weights)
+    global_network_weights_shape = weights_shape
+
+    global_episode = multiprocessing.Value('i', 0)
+    global_average_running_reward = multiprocessing.Value('d', 0.0)
+    best_score = multiprocessing.Value('d', 0.0)
+    best_checkpoint_score = multiprocessing.Value('d', 0.0)
+
+    save_lock = multiprocessing.Lock()
+    update_lock = multiprocessing.Lock()
+
     optimizer = tf.optimizers.Adam(learning_rate=learning_rate)
     workers = [
         agent.Worker(
             worker_index,
-            global_network,
+            global_network_weights,
+            global_network_weights_shape,
             env_name,
             random_seed,
             max_episodes,
             optimizer,
             network_update_frequency,
-            entropy_coefficient, 
+            entropy_coefficient,
             norm_clip_value,
             num_checkpoints,
             reward_queue,
+            gradients_queue,
+            global_episode,
+            global_average_running_reward,
+            best_score,
+            best_checkpoint_score,
+            save_lock,
+            update_lock,
             model_directory,
             save
         ) for worker_index in range(num_workers)
@@ -88,14 +124,33 @@ def run_training(
     for worker in workers:
         print(f"Starting Worker: {worker.name}")
         worker.start()
+        sleep(0.1)
 
     moving_average_rewards = []
     while True:
-        reward = reward_queue.get()
-        if reward is not None:
-            moving_average_rewards.append(reward)
-        else:
-            break
+        try:
+            reward = reward_queue.get(timeout=0.01)
+            if reward is not None:
+                moving_average_rewards.append(reward)
+            else:
+                break
+        except Empty:
+            while True:
+                try:
+                    gradients = gradients_queue.get(timeout=0.01)
+                    with update_lock:
+                        optimizer.apply_gradients(
+                            zip(gradients, global_network.trainable_weights)
+                        )
+                        with global_network_weights.get_lock():
+                            weights = global_network.get_weights()
+                            flat_weights = []
+                            for layer in weights:
+                                flat_weights += np.ravel(layer).tolist()
+                            global_network_weights = flat_weights
+                except Empty:
+                    break
+                
 
     for worker in workers:
         worker.join()
@@ -132,8 +187,6 @@ def run_training(
                     model_directory,
                     f"checkpoint_{checkpoint}.h5"
                 )
-                if not os.path.exists(model_file_path):
-                    break
 
                 test_file_path = os.path.join(
                     test_dir,
@@ -204,6 +257,7 @@ def write_summary(
         fp.write("Random Seed:".ljust(35) + f"{random_seed}\n")
         fp.write("Network Architecture:\n")
         global_network.summary(print_fn=lambda summ: fp.write(summ + "\n"))
+
 
 
 if __name__ == "__main__":

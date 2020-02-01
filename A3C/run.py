@@ -47,7 +47,6 @@ def run_training(
     action_space = env.action_space.n
 
     if random_seed is not None:
-        env.seed(random_seed)
         tf.random.set_seed(random_seed)
         np.random.seed(random_seed)
 

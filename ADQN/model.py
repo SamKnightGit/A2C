@@ -38,8 +38,8 @@ class ADQNetwork(tf.keras.Model):
             state = history.states[history_index]
             action = history.actions[history_index]
             state = np.expand_dims(state, axis=0)
-            print(state.shape)
-            total_loss += target - self(tf.convert_to_tensor(np.expand_dims(state, axis=0), dtype=tf.float32))[action]
+            action_prob = self(tf.convert_to_tensor(state[None, :], dtype=tf.float32))
+            total_loss += target - tf.squeeze(action_prob)[action]
         return total_loss
 
 

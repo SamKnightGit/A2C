@@ -82,7 +82,7 @@ class Worker(threading.Thread):
 
     def _save_global_weights(self, filename):
         if self.save:
-            self.global_network.save_weights(
+            self.main_network.save_weights(
                 os.path.join(
                     self.save_dir,
                     filename

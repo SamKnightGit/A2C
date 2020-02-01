@@ -173,7 +173,7 @@ def run_testing(
     env = gym.make(env_name)
     state_space = env.observation_space.shape[0]
     action_space = env.action_space.n
-    global_network = model.A3CNetwork(
+    global_network = model.ADQNetwork(
         state_space=state_space,
         action_space=action_space
     )

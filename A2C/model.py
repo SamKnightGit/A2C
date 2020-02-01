@@ -6,7 +6,7 @@ from collections import deque
 
 class A2CNetwork(tf.keras.Model):
     def __init__(self, state_space, action_space, value_weight=0.5, entropy_coefficient=0.01):
-        super(A3CNetwork, self).__init__()
+        super(A2CNetwork, self).__init__()
         self.state_space = state_space
         self.action_space = action_space
         self.value_weight = value_weight

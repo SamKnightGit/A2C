@@ -25,7 +25,7 @@ from queue import Queue
 @click.option('--num_checkpoints', type=int, default=10)
 @click.option('--model_directory', type=click.Path(), default="")
 @click.option('--test_model', type=bool, default=True)
-@click.option('--test_episodes', type=int, default=100)
+@click.option('--test_episodes', type=int, default=10)
 @click.option('--render_testing', type=bool, default=False)
 @click.option('--random_seed', type=int, default=None)
 @click.option('--save', type=bool, default=True)
@@ -76,9 +76,11 @@ def run_training(
         timesteps_per_rollout,
         timesteps_per_episode,
         max_episodes,
+        num_checkpoints,
         norm_clip_value,
         optimizer,
-        random_seed
+        random_seed,
+        model_directory
     )
 
     start_time = time()
@@ -104,10 +106,7 @@ def run_training(
             test_dir = os.path.join(model_directory, "test")
             os.makedirs(test_dir)
             print("Running tests with checkpoint policies...")
-            for checkpoint in tqdm(range(num_checkpoints + 1)):
-                if checkpoint == num_checkpoints:
-                    checkpoint = "best"
-
+            for checkpoint in tqdm(range(num_checkpoints)):
                 model_file_path = os.path.join(
                     model_directory,
                     f"checkpoint_{checkpoint}.h5"

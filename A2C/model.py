@@ -17,19 +17,20 @@ class A2CNetwork(tf.keras.Model):
                                                kernel_initializer=initializers.glorot_uniform)
         self.dense_critic_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
                                                 kernel_initializer=initializers.glorot_uniform)
-        self.policy_log_odds = layers.Dense(self.action_space, kernel_initializer=initializers.glorot_uniform)
+        self.policy = layers.Dense(self.action_space, activation=tf.nn.softmax,
+                                   kernel_initializer=initializers.glorot_uniform)
         self.value = layers.Dense(1, kernel_initializer=initializers.glorot_uniform)
         # Initialize network weights with random input
         self(tf.convert_to_tensor(np.random.random((1, self.state_space)), dtype=tf.float32))
 
     def call(self, inputs):
         policy_output = self.dense_critic_hidden(inputs)
-        log_odds = self.policy_log_odds(policy_output)
+        policy = self.policy(policy_output)
 
         value_output = self.dense_value_hidden(inputs)
         value = self.value(value_output)
 
-        return log_odds, value
+        return policy, value
 
     def get_loss(self, done, new_state, history, discount_factor=0.99):
         if done:
@@ -43,17 +44,20 @@ class A2CNetwork(tf.keras.Model):
             discounted_reward += reward
             all_discounted_rewards.appendleft(discounted_reward)
 
-        action_log_probs, values = self(tf.convert_to_tensor(np.vstack(history.states), dtype=tf.float32))
+        action_one_hot = tf.one_hot(history.actions, self.action_space, 1.0, 0.0)
+
+        policy, values = self(tf.convert_to_tensor(np.vstack(history.states), dtype=tf.float32))
 
         advantage = tf.convert_to_tensor(np.array(all_discounted_rewards)[:, None], dtype=tf.float32) - values
 
-        value_loss = tf.square(advantage)
+        value_loss = tf.reduce_mean(tf.square(advantage))
 
-        policy = tf.nn.softmax(action_log_probs)
-        entropy = tf.nn.softmax_cross_entropy_with_logits(policy, action_log_probs)
-        policy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(history.actions, action_log_probs)
-        policy_loss *= tf.stop_gradient(advantage)
-        policy_loss -= self.entropy_coefficient * entropy
+        log_policy = tf.math.log(tf.clip_by_value(policy, 0.000001, 0.999999))
+        log_policy_given_action = tf.reduce_sum(tf.multiply(log_policy, action_one_hot))
 
-        total_loss = tf.reduce_mean((policy_loss + self.value_weight * value_loss))
+        policy_loss = -tf.reduce_mean(log_policy_given_action * advantage)
+
+        entropy = tf.reduce_sum(tf.multiply(policy, -log_policy))
+
+        total_loss = policy_loss + self.value_weight * value_loss - entropy * self.entropy_coefficient
         return total_loss

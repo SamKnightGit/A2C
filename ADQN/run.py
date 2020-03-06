@@ -18,8 +18,10 @@ from queue import Queue
 @click.option('--max_episodes', type=int, default=100)
 @click.option('--learning_rate', type=float, default=10e-4)
 @click.option('--target_update_frequency', type=int, default=5)
-@click.option('--network_update_frequency', type=int, default=50)
+@click.option('--network_update_frequency', type=int, default=20)
 @click.option('--epsilon', type=float, default=0.10)
+@click.option('--epsilon_annealing_strategy', type=str, default="linear")
+@click.option('--annealing_episodes', type=int, default=50)
 @click.option('--discount_factor', type=float, default=0.95)
 @click.option('--norm_clip_value', type=float, default=None)
 @click.option('--num_checkpoints', type=int, default=10)
@@ -28,6 +30,7 @@ from queue import Queue
 @click.option('--test_episodes', type=int, default=100)
 @click.option('--render_testing', type=bool, default=False)
 @click.option('--random_seed', type=int, default=None)
+@click.option('--logging_frequency', type=int, default=10)
 @click.option('--save', type=bool, default=True)
 def run_training(
         env_name,
@@ -37,6 +40,8 @@ def run_training(
         target_update_frequency,
         network_update_frequency,
         epsilon,
+        epsilon_annealing_strategy,
+        annealing_episodes,
         discount_factor,
         norm_clip_value,
         num_checkpoints,
@@ -45,6 +50,7 @@ def run_training(
         test_episodes,
         render_testing,
         random_seed,
+        logging_frequency,
         save):
     env = gym.make(env_name)
     state_space = env.observation_space.shape[0]
@@ -71,9 +77,16 @@ def run_training(
             "./experiment/",
             f"{env_name}_{datetime.now()}"
         )
+    logging_directory = os.path.join(
+        model_directory,
+        "logs"
+    )
+    summary_writer = tf.summary.create_file_writer(logging_directory)
+
     if save:
         os.makedirs(model_directory, exist_ok=True)
-
+        os.makedirs(logging_directory, exist_ok=True)
+    epsilon_starting_values = [0.8, 0.5, 0.2, 0.1, 0]
     reward_queue = Queue()
     optimizer = tf.optimizers.Adam(learning_rate=learning_rate)
     workers = [
@@ -87,11 +100,16 @@ def run_training(
             main_network,
             target_update_frequency,
             network_update_frequency,
-            epsilon,
+            epsilon_starting_values[worker_index % len(epsilon_starting_values)],
+            #epsilon,
+            epsilon_annealing_strategy,
+            annealing_episodes,
             discount_factor,
             norm_clip_value,
             num_checkpoints,
             reward_queue,
+            logging_frequency,
+            summary_writer,
             model_directory,
             save
         ) for worker_index in range(num_workers)

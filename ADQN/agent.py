@@ -44,11 +44,15 @@ class Worker(threading.Thread):
                  main_network,
                  target_update_frequency,
                  update_frequency,
-                 epsilon,
+                 min_epsilon,
+                 epsilon_annealing_strategy,
+                 annealing_episodes,
                  discount_factor,
                  norm_clip_value,
                  num_checkpoints,
                  reward_queue,
+                 logging_frequency,
+                 summary_writer,
                  save_dir,
                  save=True):
         super(Worker, self).__init__()
@@ -63,11 +67,17 @@ class Worker(threading.Thread):
         self.main_network = main_network
         self.target_update_frequency = target_update_frequency
         self.update_frequency = update_frequency
-        self.epsilon = epsilon
+        self.min_epsilon = min_epsilon
+        self.start_epsilon = 1.0
+        self.epsilon = self.start_epsilon
+        self.annealing_episodes = annealing_episodes
+        self.epsilon_anneal_quantity = self._calculate_epsilon_anneal(epsilon_annealing_strategy)
         self.discount_factor = discount_factor
         self.norm_clip_value = norm_clip_value
         self.episodes_per_checkpoint = int(max_episodes / num_checkpoints)
         self.reward_queue = reward_queue
+        self.logging_frequency = logging_frequency
+        self.summary_writer = summary_writer
         self.save_dir = save_dir
         self.save = save
         if save:
@@ -93,12 +103,31 @@ class Worker(threading.Thread):
         if done:
             target_output = reward
         else:
-            target_action_prob = self.target_network(
+            target_action_values = self.target_network(
                 tf.convert_to_tensor(new_state[None, :], dtype=tf.float32)
             )
-            greedy_action_value = np.max(tf.squeeze(target_action_prob).numpy())
-            target_output = reward + self.discount_factor * greedy_action_value
+            target_action_values = tf.squeeze(target_action_values)
+            #DQN Update
+            #greedy_action_value = np.max(tf.squeeze(target_action_prob).numpy())
+            #Double DQN Update
+            main_action_values = self.main_network(
+                tf.convert_to_tensor(new_state[None, :], dtype=tf.float32)
+            )
+            main_action_values = tf.squeeze(main_action_values)
+            decoupled_action_value = target_action_values[tf.math.argmax(main_action_values)]
+            target_output = reward + self.discount_factor * decoupled_action_value
         return target_output
+
+    def _calculate_epsilon_anneal(self, strategy):
+        if strategy == "linear":
+            return self.epsilon / self.annealing_episodes
+        else:
+            raise NotImplementedError
+    
+    def _anneal_epsilon(self, episode):
+        next_epsilon = self.start_epsilon - (episode * self.epsilon_anneal_quantity)
+        if self.epsilon > self.min_epsilon:
+            self.epsilon = next_epsilon
 
     def _get_next_episode(self):
         with Worker.checkpoint_lock:
@@ -109,10 +138,12 @@ class Worker(threading.Thread):
     def run(self):
         history = History()
         update_counter = 0
+        log_counter = 0
         ep_reward = 0
         global_episode = self._get_next_episode()
         while global_episode < self.max_episodes:
             print(f"Starting global episode: {global_episode}")
+            print(f"   with epsilon value {self.epsilon}")
             if global_episode != 0 and global_episode % self.target_update_frequency == 0:
                 print("Updating target network!")
                 self.target_network.set_weights(self.main_network.get_weights())
@@ -124,11 +155,14 @@ class Worker(threading.Thread):
                 if self.epsilon > np.random.random():
                     action = np.random.choice(self.action_space)
                 else:
-                    action_prob = self.main_network(
+                    action_values = self.main_network(
                         tf.convert_to_tensor(current_state[None, :], dtype=tf.float32)
                     )
-                    action_prob = tf.squeeze(action_prob).numpy()
-                    action = np.random.choice(self.action_space, p=action_prob)
+                    action_values = tf.squeeze(action_values).numpy()
+                    action = np.argmax(action_values)
+                    if self.worker_index == 0 and log_counter % self.logging_frequency == 0:
+                        with self.summary_writer.as_default():
+                            tf.summary.scalar('max Q', action_values[action], log_counter)
 
                 new_state, reward, done, _ = self.env.step(action)
                 if done:
@@ -148,11 +182,16 @@ class Worker(threading.Thread):
                         self.optimizer.apply_gradients(
                             zip(local_gradients, self.main_network.trainable_weights)
                         )
-
+                    history.clear()
                     update_counter = 0
 
                 update_counter += 1
+                log_counter += 1
                 current_state = new_state
+            with self.summary_writer.as_default():
+                tf.summary.scalar('loss', local_loss, global_episode)
+            with self.summary_writer.as_default():
+                tf.summary.scalar('ep_reward', ep_reward, global_episode)
 
             current_checkpoint = int(global_episode / self.episodes_per_checkpoint)
             checkpoint_path = os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")
@@ -182,7 +221,8 @@ class Worker(threading.Thread):
                     Worker.global_average_running_reward = ep_reward
                 else:
                     Worker.global_average_running_reward = Worker.global_average_running_reward * 0.99 + ep_reward * 0.01
-            self.reward_queue.put(Worker.global_average_running_reward)
+                self.reward_queue.put(Worker.global_average_running_reward)
+            self._anneal_epsilon(global_episode)
             ep_reward = 0
             global_episode = self._get_next_episode()
 

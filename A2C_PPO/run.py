@@ -18,8 +18,8 @@ from queue import Queue
 @click.option('--max_episodes', type=int, default=100)
 @click.option('--timesteps_per_episode', type=int, default=400)
 @click.option('--timesteps_per_rollout', type=int, default=50)
+@click.option('--epochs_per_rollout', type=int, default=5)
 @click.option('--learning_rate', type=float, default=10e-4)
-@click.option('--network_update_frequency', type=int, default=50)
 @click.option('--entropy_coefficient', type=float, default=0.01)
 @click.option('--norm_clip_value', type=float, default=None)
 @click.option('--num_checkpoints', type=int, default=10)
@@ -35,8 +35,8 @@ def run_training(
         max_episodes,
         timesteps_per_episode,
         timesteps_per_rollout,
+        epochs_per_rollout,
         learning_rate,
-        network_update_frequency,
         entropy_coefficient,
         norm_clip_value,
         num_checkpoints,
@@ -65,21 +65,29 @@ def run_training(
             "./experiment/",
             f"{env_name}_{datetime.now()}"
         )
+    logging_directory = os.path.join(
+        model_directory,
+        "logs"
+    )
+    summary_writer = tf.summary.create_file_writer(logging_directory)
     if save:
         os.makedirs(model_directory, exist_ok=True)
+        os.makedirs(logging_directory, exist_ok=True)
 
     optimizer = tf.optimizers.Adam(learning_rate=learning_rate)
     coordinator = agent.Coordinator(
         global_network,
-        num_workers,
         env_name,
-        timesteps_per_rollout,
-        timesteps_per_episode,
+        num_workers,
         max_episodes,
+        timesteps_per_episode,
+        timesteps_per_rollout,
+        epochs_per_rollout,
         num_checkpoints,
         norm_clip_value,
         optimizer,
         random_seed,
+        summary_writer,
         model_directory
     )
 
@@ -94,8 +102,10 @@ def run_training(
         write_summary(model_directory,
                       num_workers,
                       max_episodes,
+                      timesteps_per_episode,
+                      timesteps_per_rollout,
+                      epochs_per_rollout,
                       learning_rate,
-                      network_update_frequency,
                       entropy_coefficient,
                       norm_clip_value,
                       time_taken,
@@ -161,8 +171,10 @@ def write_summary(
         model_directory,
         num_workers,
         max_episodes,
+        timesteps_per_episode,
+        timesteps_per_rollout,
+        epochs_per_rollout,
         learning_rate,
-        network_update_frequency,
         entropy_coefficient,
         norm_clip_value,
         time_taken,
@@ -173,8 +185,10 @@ def write_summary(
     with open(filepath, "w+") as fp:
         fp.write("Number of Workers:".ljust(35) + f"{num_workers}\n")
         fp.write("Training Episodes:".ljust(35) + f"{max_episodes}\n")
+        fp.write("Timesteps per Episode:".ljust(35) + f"{timesteps_per_episode}\n")
+        fp.write("Timesteps per Rollout:".ljust(35) + f"{timesteps_per_rollout}\n")
+        fp.write("Epochs per Rollout:".ljust(35) + f"{epochs_per_rollout}\n")
         fp.write("Learning Rate:".ljust(35) + f"{learning_rate}\n")
-        fp.write("Network Update Frequency:".ljust(35) + f"{network_update_frequency}\n")
         fp.write("Entropy Coefficient:".ljust(35) + f"{entropy_coefficient}\n")
         fp.write("Norm Clip Value:".ljust(35) + f"{norm_clip_value}\n")
         fp.write("Time Taken:".ljust(35) + f"{time_taken}\n")

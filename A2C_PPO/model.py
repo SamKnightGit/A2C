@@ -5,12 +5,13 @@ from collections import deque
 
 
 class A2CNetwork(tf.keras.Model):
-    def __init__(self, state_space, action_space, value_weight=0.5, entropy_coefficient=0.01):
+    def __init__(self, state_space, action_space, value_weight=0.5, entropy_coefficient=0.01, clip_range=0.2):
         super(A2CNetwork, self).__init__()
         self.state_space = state_space
         self.action_space = action_space
         self.value_weight = value_weight
         self.entropy_coefficient = entropy_coefficient
+        self.clip_range = clip_range
 
         # self.dense_shared_1 = layers.Dense(100, activation='relu')
         self.dense_value_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
@@ -50,12 +51,24 @@ class A2CNetwork(tf.keras.Model):
 
         advantage = tf.convert_to_tensor(np.array(all_discounted_rewards)[:, None], dtype=tf.float32) - values
 
-        value_loss = tf.reduce_mean(tf.square(advantage))
+        value_loss_unclipped = tf.square(advantage)
+        value_loss_clipped = tf.square(
+            history.values + tf.clip_by_value(values - history.values, -self.clip_range, self.clip_range)
+        )
+
+        value_loss = tf.reduce_mean(tf.maximum(value_loss_clipped, value_loss_unclipped))
 
         log_policy = tf.math.log(tf.clip_by_value(policy, 0.000001, 0.999999))
         log_policy_given_action = tf.reduce_sum(tf.multiply(log_policy, action_one_hot))
 
-        policy_loss = -tf.reduce_mean(log_policy_given_action * advantage)
+        log_old_policy = tf.math.log(tf.clip_by_value(history.policy, 0.000001, 0.999999))
+        log_old_policy_given_action = tf.reduce_sum(tf.multiply(log_old_policy, action_one_hot))
+
+        policy_ratio = tf.exp(log_policy_given_action - log_old_policy_given_action)
+
+        policy_loss_unclipped = -advantage * policy_ratio
+        policy_loss_clipped = -advantage * tf.clip_by_value(policy_ratio, 1.0 - self.clip_range, 1.0 + self.clip_range)
+        policy_loss = tf.reduce_mean(tf.maximum(policy_loss_unclipped, policy_loss_clipped))
 
         entropy = tf.reduce_sum(tf.multiply(policy, -log_policy))
 

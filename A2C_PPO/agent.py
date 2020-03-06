@@ -12,29 +12,37 @@ class History:
         self.states = []
         self.actions = []
         self.rewards = []
+        self.policy = []
+        self.values = []
 
-    def append(self, state, action, reward):
+    def append(self, state, action, reward, policy, value):
         self.states.append(state)
         self.actions.append(action)
         self.rewards.append(reward)
+        self.policy.append(policy)
+        self.values.append(value)
 
     def clear(self):
         self.states = []
         self.actions = []
         self.rewards = []
+        self.policy = []
+        self.values = []
 
 class Coordinator:
     def __init__(self, 
                  network, 
-                 num_workers, 
                  gym_game_name,
-                 timesteps_per_rollout, 
-                 timesteps_per_episode, 
+                 num_workers, 
                  num_episodes,
+                 timesteps_per_episode, 
+                 timesteps_per_rollout, 
+                 epochs_per_rollout,
                  num_checkpoints,
                  norm_clip_value,
                  optimizer,
                  random_seed,
+                 summary_writer,
                  save_dir):
         self.network = network
         self.workers = []
@@ -50,36 +58,53 @@ class Coordinator:
             self.workers.append(worker)
         self.timesteps_per_rollout = timesteps_per_rollout
         self.timesteps_per_episode = timesteps_per_episode
+        self.epochs_per_rollout = epochs_per_rollout
         self.num_episodes = num_episodes
         self.episodes_per_checkpoint = int(num_episodes / num_checkpoints)
         self.norm_clip_value = norm_clip_value
         self.optimizer = optimizer
+        self.summary_writer = summary_writer
         self.save_dir = save_dir
 
     def run(self):
+        timestep = 0
+        ep_timestep = 0
         rollouts_per_episode = int(self.timesteps_per_episode / self.timesteps_per_rollout)
 
         for episode in range(self.num_episodes):
             current_checkpoint = int(episode / self.episodes_per_checkpoint)
             for rollout in range(rollouts_per_episode):
+                experiences = []
                 for worker in self.workers:
-                    print(f"Processing in worker {worker.worker_index}, rollout {rollout} of episode {episode}")
+                    print(f"Exploring in worker {worker.worker_index}, rollout {rollout} of episode {episode}")
                     done, new_state, history = worker.work()
-                    with tf.GradientTape() as tape:
-                        loss = self.network.get_loss(done, new_state, history)
-                    gradients = tape.gradient(loss, self.network.trainable_weights)
-                    if self.norm_clip_value:
-                        gradients, _ = tf.clip_by_global_norm(gradients, self.norm_clip_value)
-                    self.optimizer.apply_gradients(
-                        zip(gradients, self.network.trainable_weights)
-                    )
+                    experiences.append((done, new_state, history))
                     if done:
                         print(f"Worker {worker.worker_index} finished. Resetting environment!")
+                        with self.summary_writer.as_default():
+                            tf.summary.scalar('ep_reward', worker.ep_reward, ep_timestep)
                         worker.reset_env()
-                    if not os.path.exists(os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")):
-                        self.network.save_weights(
-                            os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")
+                    ep_timestep += 1
+                for epoch in range(self.epochs_per_rollout):
+                    print(f"Training in epoch {epoch}")
+                    for done, new_state, history in experiences:
+                        with tf.GradientTape() as tape:
+                            loss = self.network.get_loss(done, new_state, history)
+                        with self.summary_writer.as_default():
+                            tf.summary.scalar('loss', loss, timestep)
+                        gradients = tape.gradient(loss, self.network.trainable_weights)
+                        if self.norm_clip_value:
+                            gradients, _ = tf.clip_by_global_norm(gradients, self.norm_clip_value)
+                        self.optimizer.apply_gradients(
+                            zip(gradients, self.network.trainable_weights)
                         )
+                        timestep += 1
+                
+                if not os.path.exists(os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")):
+                    self.network.save_weights(
+                        os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")
+                    )
+                
 
 class Worker:
     def __init__(self,
@@ -100,9 +125,11 @@ class Worker:
         self.state = np.ravel(self.env.reset())
         self.network = network
         self.timesteps_per_rollout = timesteps_per_rollout
+        self.ep_reward = 0
 
     def reset_env(self):
         self.state = np.ravel(self.env.reset())
+        self.ep_reward = 0
 
     def work(self):
         history = History()
@@ -110,8 +137,8 @@ class Worker:
         current_state = self.state
 
         done = False
-        while timestep < self.timesteps_per_rollout:
-            action_prob, _ = self.network(
+        while not done and timestep < self.timesteps_per_rollout:
+            action_prob, value = self.network(
                 tf.convert_to_tensor(current_state[np.newaxis, :], dtype=tf.float32)
             )
             action_prob = tf.squeeze(action_prob).numpy()
@@ -122,8 +149,8 @@ class Worker:
             new_state = np.ravel(new_state)
             if done:
                 reward = -1
-
-            history.append(current_state, action, reward)
+            self.ep_reward += reward
+            history.append(current_state, action, reward, action_prob, value)
             current_state = np.ravel(new_state)
             timestep += 1
         return done, current_state, history

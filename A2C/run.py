@@ -19,7 +19,6 @@ from queue import Queue
 @click.option('--timesteps_per_episode', type=int, default=400)
 @click.option('--timesteps_per_rollout', type=int, default=50)
 @click.option('--learning_rate', type=float, default=10e-4)
-@click.option('--network_update_frequency', type=int, default=50)
 @click.option('--entropy_coefficient', type=float, default=0.01)
 @click.option('--norm_clip_value', type=float, default=None)
 @click.option('--num_checkpoints', type=int, default=10)
@@ -36,7 +35,6 @@ def run_training(
         timesteps_per_episode,
         timesteps_per_rollout,
         learning_rate,
-        network_update_frequency,
         entropy_coefficient,
         norm_clip_value,
         num_checkpoints,
@@ -65,9 +63,14 @@ def run_training(
             "./experiment/",
             f"{env_name}_{datetime.now()}"
         )
+    logging_directory = os.path.join(
+        model_directory,
+        "logs"
+    )
     if save:
         os.makedirs(model_directory, exist_ok=True)
-
+        os.makedirs(logging_directory, exist_ok=True)
+    summary_writer = tf.summary.create_file_writer(logging_directory)
     optimizer = tf.optimizers.Adam(learning_rate=learning_rate)
     coordinator = agent.Coordinator(
         global_network,
@@ -80,7 +83,8 @@ def run_training(
         norm_clip_value,
         optimizer,
         random_seed,
-        model_directory
+        model_directory,
+        summary_writer
     )
 
     start_time = time()
@@ -90,12 +94,16 @@ def run_training(
     end_time = time()
     time_taken = end_time - start_time
 
+    np.save(os.path.join(model_directory, "global_return.npy"), coordinator.smoothed_reward)
+    plt.plot(coordinator.smoothed_reward)
+    plt.ylabel('Moving average reward')
+    plt.xlabel('Episode')
+    plt.savefig(os.path.join(model_directory, 'Moving_Average.png'))
     if save:
         write_summary(model_directory,
                       num_workers,
                       max_episodes,
                       learning_rate,
-                      network_update_frequency,
                       entropy_coefficient,
                       norm_clip_value,
                       time_taken,
@@ -162,7 +170,6 @@ def write_summary(
         num_workers,
         max_episodes,
         learning_rate,
-        network_update_frequency,
         entropy_coefficient,
         norm_clip_value,
         time_taken,
@@ -174,7 +181,6 @@ def write_summary(
         fp.write("Number of Workers:".ljust(35) + f"{num_workers}\n")
         fp.write("Training Episodes:".ljust(35) + f"{max_episodes}\n")
         fp.write("Learning Rate:".ljust(35) + f"{learning_rate}\n")
-        fp.write("Network Update Frequency:".ljust(35) + f"{network_update_frequency}\n")
         fp.write("Entropy Coefficient:".ljust(35) + f"{entropy_coefficient}\n")
         fp.write("Norm Clip Value:".ljust(35) + f"{norm_clip_value}\n")
         fp.write("Time Taken:".ljust(35) + f"{time_taken}\n")

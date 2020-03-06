@@ -35,7 +35,8 @@ class Coordinator:
                  norm_clip_value,
                  optimizer,
                  random_seed,
-                 save_dir):
+                 save_dir,
+                 summary_writer):
         self.network = network
         self.workers = []
         for worker_index in range(num_workers):
@@ -55,6 +56,15 @@ class Coordinator:
         self.norm_clip_value = norm_clip_value
         self.optimizer = optimizer
         self.save_dir = save_dir
+        self.summary_writer = summary_writer
+        self.smoothed_reward = []
+
+    def add_to_smoothed_reward(self, reward):
+        if len(self.smoothed_reward) == 0:
+            self.smoothed_reward.append(reward)
+        else:
+            self.smoothed_reward.append(0.01 * reward + 0.99 * self.smoothed_reward[-1])
+
 
     def run(self):
         rollouts_per_episode = int(self.timesteps_per_episode / self.timesteps_per_rollout)
@@ -75,6 +85,7 @@ class Coordinator:
                     )
                     if done:
                         print(f"Worker {worker.worker_index} finished. Resetting environment!")
+                        self.add_to_smoothed_reward(worker.ep_reward)
                         worker.reset_env()
                     if not os.path.exists(os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")):
                         self.network.save_weights(
@@ -100,9 +111,11 @@ class Worker:
         self.state = np.ravel(self.env.reset())
         self.network = network
         self.timesteps_per_rollout = timesteps_per_rollout
+        self.ep_reward = 0
 
     def reset_env(self):
         self.state = np.ravel(self.env.reset())
+        self.ep_reward = 0
 
     def work(self):
         history = History()
@@ -122,7 +135,7 @@ class Worker:
             new_state = np.ravel(new_state)
             if done:
                 reward = -1
-
+            self.ep_reward += reward
             history.append(current_state, action, reward)
             current_state = np.ravel(new_state)
             timestep += 1

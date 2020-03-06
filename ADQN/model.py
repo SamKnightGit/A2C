@@ -10,10 +10,9 @@ class ADQNetwork(tf.keras.Model):
         self.state_space = state_space
         self.action_space = action_space
 
-        self.dense_shared_1 = layers.Dense(400, activation='relu', input_dim=self.state_space,
+        self.dense_1 = layers.Dense(400, activation='relu', input_dim=self.state_space,
                                            kernel_initializer=initializers.glorot_uniform)
-        self.dense_shared_2 = layers.Dense(400, activation='relu', input_dim=self.state_space,
-                                           kernel_initializer=initializers.glorot_uniform)
+        self.dense_2 = layers.Dense(400, activation='relu', kernel_initializer=initializers.glorot_uniform)
         # self.dense_value_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
         #                                        kernel_initializer=initializers.glorot_uniform)
         # self.dense_critic_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
@@ -24,22 +23,32 @@ class ADQNetwork(tf.keras.Model):
         self(tf.convert_to_tensor(np.random.random((1, self.state_space)), dtype=tf.float32))
 
     def call(self, inputs):
-        shared_output = self.dense_shared_1(inputs)
-        shared_output = self.dense_shared_2(shared_output)
+        output = self.dense_1(inputs)
+        output = self.dense_2(output)
 
-        q_value = self.q_value(shared_output)
+        q_value = self.q_value(output)
 
         return q_value
 
     def get_loss(self, history):
-        total_loss = 0
-        for history_index in range(len(history.targets)):
-            target = history.targets[history_index]
-            state = history.states[history_index]
-            action = history.actions[history_index]
-            state = np.expand_dims(state, axis=0)
-            action_prob = self(tf.convert_to_tensor(state[None, :], dtype=tf.float32))
-            total_loss += target - tf.squeeze(action_prob)[action]
+        targets = np.array(history.targets)
+        states = np.array(history.states)
+        states = np.expand_dims(states, axis=0)
+        actions = np.array(history.actions)
+        action_indices = np.zeros((actions.shape[0], 2))
+        action_indices[:,0] = np.arange(actions.shape[0])
+        action_indices[:,1] = actions
+        action_indices = tf.convert_to_tensor(action_indices, dtype=tf.int32)
+        
+        action_prob = self(tf.convert_to_tensor(states[None, :], dtype=tf.float32))
+        action_prob = tf.squeeze(action_prob)
+        number_experiences = targets.shape[0] if len(targets.shape) > 1 else 1
+        if len(action_prob.shape) == 1: # Only one action taken
+            action_prob = tf.expand_dims(action_prob, 0)
+        total_loss = tf.reduce_sum(
+            tf.square(targets - tf.gather_nd(action_prob, action_indices))
+        )
+        tf.divide(total_loss, number_experiences)
         return total_loss
 
 

@@ -48,7 +48,7 @@ class ADQNetwork(tf.keras.Model):
         total_loss = tf.reduce_sum(
             tf.square(targets - tf.gather_nd(action_prob, action_indices))
         )
-        tf.divide(total_loss, number_experiences)
+        total_loss = tf.divide(total_loss, number_experiences)
         return total_loss
 
 

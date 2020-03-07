@@ -86,7 +86,7 @@ def run_training(
     if save:
         os.makedirs(model_directory, exist_ok=True)
         os.makedirs(logging_directory, exist_ok=True)
-    epsilon_starting_values = [0.8, 0.5, 0.2, 0.1, 0]
+    epsilon_minimum_values = [0.1, 0.01, 0.5]
     reward_queue = Queue()
     optimizer = tf.optimizers.Adam(learning_rate=learning_rate)
     workers = [
@@ -100,7 +100,7 @@ def run_training(
             main_network,
             target_update_frequency,
             network_update_frequency,
-            epsilon_starting_values[worker_index % len(epsilon_starting_values)],
+            epsilon_minimum_values[worker_index % len(epsilon_minimum_values)],
             #epsilon,
             epsilon_annealing_strategy,
             annealing_episodes,
@@ -141,6 +141,8 @@ def run_training(
                       target_update_frequency,
                       network_update_frequency,
                       epsilon,
+                      epsilon_annealing_strategy,
+                      annealing_episodes,
                       discount_factor,
                       norm_clip_value,
                       time_taken,
@@ -219,6 +221,8 @@ def write_summary(
         target_update_frequency,
         network_update_frequency,
         epsilon,
+        epsilon_annealing_strategy,
+        annealing_episodes,
         discount_factor,
         norm_clip_value,
         time_taken,
@@ -233,6 +237,8 @@ def write_summary(
         fp.write("Target Update Frequency (eps):".ljust(35) + f"{target_update_frequency}\n")
         fp.write("Network Update Frequency:".ljust(35) + f"{network_update_frequency}\n")
         fp.write("Epsilon:".ljust(35) + f"{epsilon}\n")
+        fp.write("Epsilon Annealing Strategy:".ljust(35) + f"{epsilon_annealing_strategy}\n")
+        fp.write("Epsilon Annealing Episodes:".ljust(35) + f"{annealing_episodes}\n")
         fp.write("Discount Factor:".ljust(35) + f"{discount_factor}\n")
         fp.write("Norm Clip Value:".ljust(35) + f"{norm_clip_value}\n")
         fp.write("Time Taken:".ljust(35) + f"{time_taken}\n")

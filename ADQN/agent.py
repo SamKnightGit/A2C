@@ -126,7 +126,9 @@ class Worker(threading.Thread):
     
     def _anneal_epsilon(self, episode):
         next_epsilon = self.start_epsilon - (episode * self.epsilon_anneal_quantity)
-        if self.epsilon > self.min_epsilon:
+        if next_epsilon < self.min_epsilon:
+            self.epsilon = self.min_epsilon
+        else:
             self.epsilon = next_epsilon
 
     def _get_next_episode(self):

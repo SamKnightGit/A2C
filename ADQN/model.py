@@ -10,14 +10,14 @@ class ADQNetwork(tf.keras.Model):
         self.state_space = state_space
         self.action_space = action_space
 
-        self.dense_1 = layers.Dense(400, activation='relu', input_dim=self.state_space,
-                                           kernel_initializer=initializers.glorot_uniform)
-        self.dense_2 = layers.Dense(400, activation='relu', kernel_initializer=initializers.glorot_uniform)
+        self.dense_1 = layers.Dense(500, activation='relu', input_dim=self.state_space,
+                                    kernel_initializer=initializers.glorot_uniform)
+        self.dense_2 = layers.Dense(500, activation='relu', kernel_initializer=initializers.glorot_uniform)
         # self.dense_value_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
         #                                        kernel_initializer=initializers.glorot_uniform)
         # self.dense_critic_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
         #                                         kernel_initializer=initializers.glorot_uniform)
-        self.q_value = layers.Dense(self.action_space, activation=tf.nn.softmax,
+        self.q_value = layers.Dense(self.action_space, activation='relu', 
                                     kernel_initializer=initializers.glorot_uniform)
         # Initialize network weights with random input
         self(tf.convert_to_tensor(np.random.random((1, self.state_space)), dtype=tf.float32))
@@ -40,13 +40,13 @@ class ADQNetwork(tf.keras.Model):
         action_indices[:,1] = actions
         action_indices = tf.convert_to_tensor(action_indices, dtype=tf.int32)
         
-        action_prob = self(tf.convert_to_tensor(states[None, :], dtype=tf.float32))
-        action_prob = tf.squeeze(action_prob)
+        action_values = self(tf.convert_to_tensor(states[None, :], dtype=tf.float32))
+        action_values = tf.squeeze(action_values)
         number_experiences = targets.shape[0] if len(targets.shape) > 1 else 1
-        if len(action_prob.shape) == 1: # Only one action taken
-            action_prob = tf.expand_dims(action_prob, 0)
+        if len(action_values.shape) == 1: # Only one action taken
+            action_values = tf.expand_dims(action_values, 0)
         total_loss = tf.reduce_sum(
-            tf.square(targets - tf.gather_nd(action_prob, action_indices))
+            tf.square(targets - tf.gather_nd(action_values, action_indices))
         )
         total_loss = tf.divide(total_loss, number_experiences)
         return total_loss

@@ -26,31 +26,22 @@ class History:
 class Coordinator:
     def __init__(self, 
                  network, 
-                 num_workers, 
+                 number_envs, 
                  gym_game_name,
                  timesteps_per_rollout, 
                  timesteps_per_episode, 
                  num_episodes,
                  num_checkpoints,
                  norm_clip_value,
+                 discount_factor,
                  optimizer,
                  random_seed,
                  save_dir,
                  summary_writer):
         self.network = network
-        self.workers = []
-        for worker_index in range(num_workers):
-            worker = Worker(
-                worker_index, 
-                gym_game_name,
-                timesteps_per_episode,
-                network,
-                timesteps_per_rollout,
-                random_seed
-            )
-            self.workers.append(worker)
         self.timesteps_per_rollout = timesteps_per_rollout
         self.timesteps_per_episode = timesteps_per_episode
+        self.env = ParallelEnvironment(gym_game_name, number_envs, network, timesteps_per_rollout, discount_factor, random_seed)
         self.num_episodes = num_episodes
         self.episodes_per_checkpoint = int(num_episodes / num_checkpoints)
         self.norm_clip_value = norm_clip_value
@@ -72,25 +63,27 @@ class Coordinator:
         for episode in range(self.num_episodes):
             current_checkpoint = int(episode / self.episodes_per_checkpoint)
             for rollout in range(rollouts_per_episode):
-                for worker in self.workers:
-                    print(f"Processing in worker {worker.worker_index}, rollout {rollout} of episode {episode}")
-                    done, new_state, history = worker.work()
-                    with tf.GradientTape() as tape:
-                        loss = self.network.get_loss(done, new_state, history)
-                    gradients = tape.gradient(loss, self.network.trainable_weights)
-                    if self.norm_clip_value:
-                        gradients, _ = tf.clip_by_global_norm(gradients, self.norm_clip_value)
-                    self.optimizer.apply_gradients(
-                        zip(gradients, self.network.trainable_weights)
+                states, actions, rewards, dones, values = self.env.get_trajectories()
+                print(f"Rewards: {rewards}")
+                with tf.GradientTape() as tape:
+                    loss = self.network.get_loss(states, rewards, dones, actions, values)
+                print(f"Loss: {loss}")
+                gradients = tape.gradient(loss, self.network.trainable_weights)
+                print(f"Max reward at episode {episode}, rollout {rollout}: {max(rewards)}")
+
+                
+                if self.norm_clip_value:
+                    gradients, _ = tf.clip_by_global_norm(gradients, self.norm_clip_value)
+                self.optimizer.apply_gradients(
+                    zip(gradients, self.network.trainable_weights)
+                )
+                # Average over rewards produced from trajectory.    
+                self.add_to_smoothed_reward(tf.reduce_mean(rewards))
+                    
+                if not os.path.exists(os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")):
+                    self.network.save_weights(
+                        os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")
                     )
-                    if done:
-                        print(f"Worker {worker.worker_index} finished. Resetting environment!")
-                        self.add_to_smoothed_reward(worker.ep_reward)
-                        worker.reset_env()
-                    if not os.path.exists(os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")):
-                        self.network.save_weights(
-                            os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")
-                        )
 
 class Worker:
     def __init__(self,
@@ -197,4 +190,97 @@ class TestWorker:
             with open(self.test_file_name, "w+") as fp:
                 fp.write("Best Reward:".ljust(20) + f"{best_reward}\n")
                 fp.write("Average Reward:".ljust(20) + f"{average_reward}\n")
+
+
+class ParallelEnvironment:
+    def __init__(self, environment_name, number_environments, ac_network, rollout_length, gamma, random_seed=None):
+        self.number_environments = number_environments
+        self.envs = [gym.make(environment_name) for _ in range(number_environments)]
+        self.ac_network = ac_network
+        self.rollout_length = rollout_length
+        self.gamma = gamma
+        if random_seed:
+            for env_index in range(len(self.envs)):
+                self.envs[env_index].seed(random_seed + env_index)
+        self.dones = [False for _ in range(number_environments)]
+        
+    def set_done(self, dones):
+        done_indices = []
+        for done_index in range(len(dones)):
+            if dones[done_index]:
+                done_indices.append(done_index)
+        
+        false_counter = 0
+        for done_index in range(len(self.dones)):
+            if self.dones[done_index] == False:
+                if done_index in done_indices:
+                    self.dones[done_index] = True
+                    false_counter += 1
+
+    def step(self, actions):
+        actions = tf.squeeze(actions)
+        print(actions)
+        print(actions[0].numpy())
+        steps = []
+        for env_index in range(len(self.envs)):
+            if self.dones[env_index] == True:
+                continue
+            steps.append(self.envs[env_index].step(actions[env_index].numpy()))
+        states, rewards, dones, infos = zip(*steps)
+        return np.stack(states), np.stack(rewards), np.stack(dones), infos
+            
+
+    def reset(self):
+        self.dones = [False for _ in range(self.number_environments)]
+        return np.stack([env.reset() for env in self.envs])
+
+    def discount(self, rewards, dones, gamma):
+        discounted_reward = []
+        final_reward = 0
+        for reward, done in zip(rewards[::-1], dones[::-1]):
+            final_reward = reward + gamma * final_reward * (1.0 - done)
+            discounted_reward.append(final_reward)
+        return discounted_reward[::-1]
+
+    def get_trajectories(self):
+        states, actions, rewards, values, dones = [], [], [], [], []
+
+        env_states = self.reset()
+        for _ in range(self.rollout_length):
+            trajectory_info = self.ac_network.act(env_states)
+            env_actions = trajectory_info.action
+            env_states, env_rewards, env_dones, _ = self.step(env_actions)
+
+            states.append(env_states)
+            actions.append(env_actions)
+            rewards.append(env_rewards)
+            values.append(trajectory_info.value)
+            dones.append(env_dones)
+
+            self.set_done(env_dones)
+            if np.all(self.dones):
+                break 
+        
+
+        states = np.array(states)
+        actions = np.array(actions)
+        rewards = np.array(rewards, dtype='float32')
+        values = np.array(values, dtype='float32')
+        dones = np.array(dones, dtype='bool')
+
+        if self.gamma > 0:
+            _, last_values = self.ac_network(env_states)
+            for n, (past_rewards, past_dones, past_values) in enumerate(zip(rewards, dones, last_values)):
+                past_rewards = past_rewards.tolist()
+                past_dones = past_dones.tolist()
+
+                if past_dones[-1] == 0:
+                    past_rewards = self.discount(past_rewards + [past_values], past_dones+[0], self.gamma)[:-1]
+                else:
+                    past_rewards = self.discount(past_rewards, past_dones, self.gamma)
+                rewards[n] = past_rewards 
+
+
+        return states, actions, rewards, dones, values
+
 

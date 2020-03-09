@@ -20,6 +20,7 @@ from queue import Queue
 @click.option('--timesteps_per_rollout', type=int, default=50)
 @click.option('--learning_rate', type=float, default=10e-4)
 @click.option('--entropy_coefficient', type=float, default=0.01)
+@click.option('--discount_factor', type=float, default=0.99)
 @click.option('--norm_clip_value', type=float, default=None)
 @click.option('--num_checkpoints', type=int, default=10)
 @click.option('--model_directory', type=click.Path(), default="")
@@ -36,6 +37,7 @@ def run_training(
         timesteps_per_rollout,
         learning_rate,
         entropy_coefficient,
+        discount_factor,
         norm_clip_value,
         num_checkpoints,
         model_directory,
@@ -81,6 +83,7 @@ def run_training(
         max_episodes,
         num_checkpoints,
         norm_clip_value,
+        discount_factor,
         optimizer,
         random_seed,
         model_directory,
@@ -105,6 +108,7 @@ def run_training(
                       max_episodes,
                       learning_rate,
                       entropy_coefficient,
+                      discount_factor,
                       norm_clip_value,
                       time_taken,
                       random_seed,
@@ -171,6 +175,7 @@ def write_summary(
         max_episodes,
         learning_rate,
         entropy_coefficient,
+        discount_factor,
         norm_clip_value,
         time_taken,
         random_seed,
@@ -182,6 +187,7 @@ def write_summary(
         fp.write("Training Episodes:".ljust(35) + f"{max_episodes}\n")
         fp.write("Learning Rate:".ljust(35) + f"{learning_rate}\n")
         fp.write("Entropy Coefficient:".ljust(35) + f"{entropy_coefficient}\n")
+        fp.write("Discount Factor:".ljust(35) + f"{discount_factor}\n")
         fp.write("Norm Clip Value:".ljust(35) + f"{norm_clip_value}\n")
         fp.write("Time Taken:".ljust(35) + f"{time_taken}\n")
         fp.write("Formatted Time:".ljust(35) + f"{timedelta(seconds=time_taken)}\n")

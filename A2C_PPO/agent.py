@@ -35,7 +35,7 @@ class Coordinator:
                  gym_game_name,
                  num_workers, 
                  num_episodes,
-                 timesteps_per_episode, 
+                 timesteps_per_episode,
                  timesteps_per_rollout, 
                  epochs_per_rollout,
                  num_checkpoints,
@@ -50,7 +50,6 @@ class Coordinator:
             worker = Worker(
                 worker_index, 
                 gym_game_name,
-                timesteps_per_episode,
                 network,
                 timesteps_per_rollout,
                 random_seed
@@ -65,40 +64,61 @@ class Coordinator:
         self.optimizer = optimizer
         self.summary_writer = summary_writer
         self.save_dir = save_dir
+        self.smoothed_reward = []
+
+    def add_to_smoothed_reward(self, reward):
+        if len(self.smoothed_reward) == 0:
+            self.smoothed_reward.append(reward)
+        else:
+            self.smoothed_reward.append(0.01 * reward + 0.99 * self.smoothed_reward[-1])
 
     def run(self):
         timestep = 0
         ep_timestep = 0
         rollouts_per_episode = int(self.timesteps_per_episode / self.timesteps_per_rollout)
+        current_checkpoint = 0
+        best_checkpoint_reward = 0
 
         for episode in range(self.num_episodes):
-            current_checkpoint = int(episode / self.episodes_per_checkpoint)
+
+            next_checkpoint = int(episode / self.episodes_per_checkpoint)
+            if (next_checkpoint != current_checkpoint):
+                best_checkpoint_reward = 0
+                current_checkpoint = next_checkpoint
+            for worker in self.workers:
+                worker.reset_env()
             for rollout in range(rollouts_per_episode):
                 experiences = []
                 for worker in self.workers:
-                    print(f"Exploring in worker {worker.worker_index}, rollout {rollout} of episode {episode}")
-                    done, new_state, history = worker.work()
-                    experiences.append((done, new_state, history))
-                    if done:
-                        print(f"Worker {worker.worker_index} finished. Resetting environment!")
-                        with self.summary_writer.as_default():
-                            tf.summary.scalar('ep_reward', worker.ep_reward, ep_timestep)
-                        worker.reset_env()
-                    ep_timestep += 1
-                for epoch in range(self.epochs_per_rollout):
-                    print(f"Training in epoch {epoch}")
-                    for done, new_state, history in experiences:
-                        with tf.GradientTape() as tape:
-                            loss = self.network.get_loss(done, new_state, history)
-                        with self.summary_writer.as_default():
-                            tf.summary.scalar('loss', loss, timestep)
-                        gradients = tape.gradient(loss, self.network.trainable_weights)
-                        if self.norm_clip_value:
-                            gradients, _ = tf.clip_by_global_norm(gradients, self.norm_clip_value)
-                        self.optimizer.apply_gradients(
-                            zip(gradients, self.network.trainable_weights)
-                        )
-                        timestep += 1
+                    if not worker.done:
+                        print(f"Exploring in worker {worker.worker_index}, rollout {rollout} of episode {episode}")
+                        done, new_state, history = worker.work()
+                        experiences.append((done, new_state, history))
+                        if done:
+                            print(f"Worker {worker.worker_index} finished. Resetting environment!")
+                            if worker.ep_reward >= best_checkpoint_reward:
+                                print(f"-------\n Best checkpoint score of {worker.ep_reward} achieved\n-------")
+                                best_checkpoint_reward = worker.ep_reward
+                            self.add_to_smoothed_reward(worker.ep_reward)
+                            with self.summary_writer.as_default():
+                                tf.summary.scalar('ep_reward', worker.ep_reward, ep_timestep)
+                        ep_timestep += 1
+                if experiences:
+                    for epoch in range(self.epochs_per_rollout):
+                        np.random.shuffle(experiences)
+                        print(f"Training in epoch {epoch}")
+                        for done, new_state, history in experiences:
+                            with tf.GradientTape() as tape:
+                                loss = self.network.get_loss(done, new_state, history)
+                            with self.summary_writer.as_default():
+                                tf.summary.scalar('loss', loss, timestep)
+                            gradients = tape.gradient(loss, self.network.trainable_weights)
+                            if self.norm_clip_value:
+                                gradients, _ = tf.clip_by_global_norm(gradients, self.norm_clip_value)
+                            self.optimizer.apply_gradients(
+                                zip(gradients, self.network.trainable_weights)
+                            )
+                            timestep += 1
                 
                 if not os.path.exists(os.path.join(self.save_dir, f"checkpoint_{current_checkpoint}.h5")):
                     self.network.save_weights(
@@ -110,14 +130,12 @@ class Worker:
     def __init__(self,
                  worker_index,
                  gym_game_name,
-                 timesteps_per_episode,
                  network,
                  timesteps_per_rollout,
                  random_seed=None):
         self.worker_index = worker_index
         self.name = f"Worker_{worker_index}"
         self.env = gym.make(gym_game_name)
-        self.env._max_episode_steps = timesteps_per_episode
         if random_seed is not None:
             self.env.seed(random_seed)
         self.state_space = self.env.observation_space.shape[0]
@@ -126,10 +144,13 @@ class Worker:
         self.network = network
         self.timesteps_per_rollout = timesteps_per_rollout
         self.ep_reward = 0
+        self.done = False
 
     def reset_env(self):
         self.state = np.ravel(self.env.reset())
+        self.done = False
         self.ep_reward = 0
+        
 
     def work(self):
         history = History()
@@ -153,6 +174,7 @@ class Worker:
             history.append(current_state, action, reward, action_prob, value)
             current_state = np.ravel(new_state)
             timestep += 1
+        self.done = done
         return done, current_state, history
 
 

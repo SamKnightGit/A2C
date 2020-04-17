@@ -14,12 +14,12 @@ from queue import Queue
 
 @click.command()
 @click.option('--env_name', type=str, default='CartPole-v1')
-@click.option('--num_workers', type=int, default=1)
-@click.option('--max_episodes', type=int, default=100)
-@click.option('--learning_rate', type=float, default=10e-4)
+@click.option('--num_workers', type=int, default=16)
+@click.option('--max_episodes', type=int, default=5000)
+@click.option('--learning_rate', type=float, default=10e-5)
 @click.option('--network_update_frequency', type=int, default=50)
 @click.option('--entropy_coefficient', type=float, default=0.01)
-@click.option('--norm_clip_value', type=float, default=None)
+@click.option('--norm_clip_value', type=float, default=1.0)
 @click.option('--num_checkpoints', type=int, default=10)
 @click.option('--model_directory', type=click.Path(), default="")
 @click.option('--test_model', type=bool, default=True)
@@ -59,7 +59,9 @@ def run_training(
     if not model_directory:
         model_directory = os.path.join(
             "./experiment/",
-            f"{env_name}_{datetime.now()}"
+            # f"{env_name}_{datetime.now()}"
+            "final_cartpole",
+            f"{random_seed}"
         )
     if save:
         os.makedirs(model_directory, exist_ok=True)
@@ -114,6 +116,7 @@ def run_training(
                       random_seed,
                       global_network,
                       filename="summary.txt")
+        np.save(os.path.join(model_directory, "global_return.npy"), moving_average_rewards)
         plt.plot(moving_average_rewards)
         plt.ylabel('Moving average reward')
         plt.xlabel('Episode')
@@ -205,7 +208,37 @@ def write_summary(
         global_network.summary(print_fn=lambda summ: fp.write(summ + "\n"))
 
 
+def run_testing_manual(model_directory, num_checkpoints, env_name="CartPole-v1", test_episodes=100, render_testing=False):
+    for i in range(10, 110, 10):
+        model_subdirectory = os.path.join(model_directory, str(i))
+        test_dir = os.path.join(model_subdirectory, "test")
+        os.makedirs(test_dir, exist_ok=True)
+        print("Running tests with checkpoint policies...")
+        for checkpoint in tqdm(range(num_checkpoints + 1)):
+            if checkpoint == num_checkpoints:
+                checkpoint = "best"
+
+            model_file_path = os.path.join(
+                model_subdirectory,
+                f"checkpoint_{checkpoint}.h5"
+            )
+            if not os.path.exists(model_file_path):
+                break
+
+            test_file_path = os.path.join(
+                test_dir,
+                f"test_checkpoint_{checkpoint}.txt"
+            )
+
+            run_testing(
+                env_name,
+                test_episodes,
+                model_file_path,
+                test_file_path,
+                render_testing
+            )
+
 if __name__ == "__main__":
     run_training()
-
+    # run_testing_manual("/home/sam/Documents/Dissertation/gym/A3C/experiment/final_cartpole", 10)
 

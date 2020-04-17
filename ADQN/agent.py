@@ -247,6 +247,7 @@ class TestWorker(threading.Thread):
         self.max_episodes = max_episodes
         self.test_file_name = test_file_name
         self.render = render
+        self.episodic_rewards = []
 
     def run(self):
         episode = 0
@@ -271,6 +272,8 @@ class TestWorker(threading.Thread):
                 ep_reward += reward
 
                 current_state = new_state
+
+            self.episodic_rewards.append(ep_reward)
             if ep_reward > best_reward:
                 best_reward = ep_reward
             average_reward += ep_reward
@@ -280,4 +283,8 @@ class TestWorker(threading.Thread):
             with open(self.test_file_name, "w+") as fp:
                 fp.write(f"Best Reward: {best_reward}\n")
                 fp.write(f"Average Reward: {average_reward}\n")
+            head, tail = os.path.split(self.test_file_name)
+            file_name, file_extension = tail.split(".") 
+            np.save(os.path.join(head, file_name + ".npy"), self.episodic_rewards)
+            self.episodic_rewards = []
 

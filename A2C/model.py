@@ -57,7 +57,7 @@ class A2CNetwork(tf.keras.Model):
 
         policy_loss = -tf.reduce_mean(log_policy_given_action * advantage)
 
-        entropy = tf.reduce_sum(tf.multiply(policy, -log_policy))
+        entropy = -tf.reduce_mean(tf.multiply(policy, log_policy))
 
         total_loss = policy_loss + self.value_weight * value_loss - entropy * self.entropy_coefficient
         return total_loss

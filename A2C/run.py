@@ -14,17 +14,16 @@ from queue import Queue
 
 @click.command()
 @click.option('--env_name', type=str, default='CartPole-v1')
-@click.option('--num_workers', type=int, default=1)
-@click.option('--max_episodes', type=int, default=100)
-@click.option('--timesteps_per_episode', type=int, default=400)
-@click.option('--timesteps_per_rollout', type=int, default=50)
-@click.option('--learning_rate', type=float, default=10e-4)
+@click.option('--num_workers', type=int, default=16)
+@click.option('--max_episodes', type=int, default=5000)
+@click.option('--timesteps_per_rollout', type=int, default=100)
+@click.option('--learning_rate', type=float, default=10e-5)
 @click.option('--entropy_coefficient', type=float, default=0.01)
-@click.option('--norm_clip_value', type=float, default=None)
+@click.option('--norm_clip_value', type=float, default=1)
 @click.option('--num_checkpoints', type=int, default=10)
 @click.option('--model_directory', type=click.Path(), default="")
 @click.option('--test_model', type=bool, default=True)
-@click.option('--test_episodes', type=int, default=10)
+@click.option('--test_episodes', type=int, default=100)
 @click.option('--render_testing', type=bool, default=False)
 @click.option('--random_seed', type=int, default=None)
 @click.option('--save', type=bool, default=True)
@@ -32,7 +31,6 @@ def run_training(
         env_name,
         num_workers,
         max_episodes,
-        timesteps_per_episode,
         timesteps_per_rollout,
         learning_rate,
         entropy_coefficient,
@@ -45,6 +43,7 @@ def run_training(
         random_seed,
         save):
     env = gym.make(env_name)
+    timesteps_per_episode = env._max_episode_steps
     state_space = env.observation_space.shape[0]
     action_space = env.action_space.n
 
@@ -61,7 +60,9 @@ def run_training(
     if not model_directory:
         model_directory = os.path.join(
             "./experiment/",
-            f"{env_name}_{datetime.now()}"
+            # f"{env_name}_{datetime.now()}"
+            "final_cartpole",
+            f"{random_seed}"
         )
     logging_directory = os.path.join(
         model_directory,
@@ -189,8 +190,38 @@ def write_summary(
         fp.write("Network Architecture:\n")
         global_network.summary(print_fn=lambda summ: fp.write(summ + "\n"))
 
+def run_testing_manual(model_directory, num_checkpoints, env_name="CartPole-v1", test_episodes=100, render_testing=False):
+    for i in range(10, 110, 10):
+        model_subdirectory = os.path.join(model_directory, str(i))
+        test_dir = os.path.join(model_subdirectory, "test")
+        os.makedirs(test_dir, exist_ok=True)
+        print("Running tests with checkpoint policies...")
+        for checkpoint in tqdm(range(num_checkpoints + 1)):
+            if checkpoint == num_checkpoints:
+                checkpoint = "best"
+
+            model_file_path = os.path.join(
+                model_subdirectory,
+                f"checkpoint_{checkpoint}.h5"
+            )
+            if not os.path.exists(model_file_path):
+                break
+
+            test_file_path = os.path.join(
+                test_dir,
+                f"test_checkpoint_{checkpoint}.txt"
+            )
+
+            run_testing(
+                env_name,
+                test_episodes,
+                model_file_path,
+                test_file_path,
+                render_testing
+            )
 
 if __name__ == "__main__":
     run_training()
+    # run_testing_manual("/home/sam/Documents/Dissertation/gym/A2C/experiment/final_cartpole", 10)
 
 

@@ -51,12 +51,7 @@ class A2CNetwork(tf.keras.Model):
 
         advantage = tf.convert_to_tensor(np.array(all_discounted_rewards)[:, None], dtype=tf.float32) - values
 
-        value_loss_unclipped = tf.square(advantage)
-        value_loss_clipped = tf.square(
-            history.values + tf.clip_by_value(values - history.values, -self.clip_range, self.clip_range)
-        )
-
-        value_loss = tf.reduce_mean(tf.maximum(value_loss_clipped, value_loss_unclipped))
+        value_loss = tf.reduce_mean(tf.square(advantage))
 
         log_policy = tf.math.log(tf.clip_by_value(policy, 0.000001, 0.999999))
         log_policy_given_action = tf.reduce_sum(tf.multiply(log_policy, action_one_hot))
@@ -66,11 +61,11 @@ class A2CNetwork(tf.keras.Model):
 
         policy_ratio = tf.exp(log_policy_given_action - log_old_policy_given_action)
 
-        policy_loss_unclipped = -advantage * policy_ratio
-        policy_loss_clipped = -advantage * tf.clip_by_value(policy_ratio, 1.0 - self.clip_range, 1.0 + self.clip_range)
-        policy_loss = tf.reduce_mean(tf.maximum(policy_loss_unclipped, policy_loss_clipped))
+        policy_loss_unclipped = advantage * policy_ratio
+        policy_loss_clipped = advantage * tf.clip_by_value(policy_ratio, 1.0 - self.clip_range, 1.0 + self.clip_range)
+        policy_loss = -tf.reduce_mean(tf.minimum(policy_loss_unclipped, policy_loss_clipped))
 
-        entropy = tf.reduce_sum(tf.multiply(policy, -log_policy))
+        entropy = -tf.reduce_sum(tf.multiply(policy, log_policy))
 
         total_loss = policy_loss + self.value_weight * value_loss - entropy * self.entropy_coefficient
         return total_loss

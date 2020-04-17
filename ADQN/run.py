@@ -15,19 +15,19 @@ from queue import Queue
 @click.command()
 @click.option('--env_name', type=str, default='CartPole-v1')
 @click.option('--num_workers', type=int, default=16)
-@click.option('--max_episodes', type=int, default=10000)
-@click.option('--learning_rate', type=float, default=10e-4)
+@click.option('--max_episodes', type=int, default=5000)
+@click.option('--learning_rate', type=float, default=10e-5)
 @click.option('--target_update_frequency', type=int, default=1)
 @click.option('--network_update_frequency', type=int, default=20)
 @click.option('--epsilon', type=float, default=0.10)
 @click.option('--epsilon_annealing_strategy', type=str, default="linear")
-@click.option('--annealing_episodes', type=int, default=2000)
+@click.option('--annealing_episodes', type=int, default=1000)
 @click.option('--discount_factor', type=float, default=0.99)
-@click.option('--norm_clip_value', type=float, default=None)
+@click.option('--norm_clip_value', type=float, default=1.0)
 @click.option('--num_checkpoints', type=int, default=10)
 @click.option('--model_directory', type=click.Path(), default="")
 @click.option('--test_model', type=bool, default=True)
-@click.option('--test_episodes', type=int, default=50)
+@click.option('--test_episodes', type=int, default=100)
 @click.option('--render_testing', type=bool, default=False)
 @click.option('--random_seed', type=int, default=None)
 @click.option('--logging_frequency', type=int, default=10)
@@ -75,7 +75,9 @@ def run_training(
     if not model_directory:
         model_directory = os.path.join(
             "./experiment/",
-            f"{env_name}_{datetime.now()}"
+            # f"{env_name}_{datetime.now()}"
+            "final_cartpole",
+            f"{random_seed}"
         )
     logging_directory = os.path.join(
         model_directory,
@@ -86,7 +88,7 @@ def run_training(
     if save:
         os.makedirs(model_directory, exist_ok=True)
         os.makedirs(logging_directory, exist_ok=True)
-    epsilon_minimum_values = [0.1, 0.01, 0.5]
+    epsilon_minimum_values = [0.5, 0.1, 0.01, 0.001, 0]
     reward_queue = Queue()
     optimizer = tf.optimizers.Adam(learning_rate=learning_rate)
     workers = [
@@ -140,7 +142,7 @@ def run_training(
                       learning_rate,
                       target_update_frequency,
                       network_update_frequency,
-                      epsilon,
+                      epsilon_minimum_values,
                       epsilon_annealing_strategy,
                       annealing_episodes,
                       discount_factor,
@@ -149,6 +151,8 @@ def run_training(
                       random_seed,
                       main_network,
                       filename="summary.txt")
+
+        np.save(os.path.join(model_directory, "global_return.npy"), moving_average_rewards)
         plt.plot(moving_average_rewards)
         plt.ylabel('Moving average reward')
         plt.xlabel('Episode')
@@ -220,7 +224,7 @@ def write_summary(
         learning_rate,
         target_update_frequency,
         network_update_frequency,
-        epsilon,
+        epsilon_minimum_values,
         epsilon_annealing_strategy,
         annealing_episodes,
         discount_factor,

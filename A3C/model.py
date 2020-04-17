@@ -13,9 +13,9 @@ class A3CNetwork(tf.keras.Model):
         self.entropy_coefficient = entropy_coefficient
 
         # self.dense_shared_1 = layers.Dense(100, activation='relu')
-        self.dense_value_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
-                                               kernel_initializer=initializers.glorot_uniform)
         self.dense_critic_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
+                                               kernel_initializer=initializers.glorot_uniform)
+        self.dense_actor_hidden = layers.Dense(100, activation='relu', input_dim=self.state_space,
                                                 kernel_initializer=initializers.glorot_uniform)
         self.policy = layers.Dense(self.action_space, activation=tf.nn.softmax,
                                    kernel_initializer=initializers.glorot_uniform)
@@ -24,10 +24,10 @@ class A3CNetwork(tf.keras.Model):
         self(tf.convert_to_tensor(np.random.random((1, self.state_space)), dtype=tf.float32))
 
     def call(self, inputs):
-        policy_output = self.dense_critic_hidden(inputs)
+        policy_output = self.dense_actor_hidden(inputs)
         policy = self.policy(policy_output)
 
-        value_output = self.dense_value_hidden(inputs)
+        value_output = self.dense_critic_hidden(inputs)
         value = self.value(value_output)
 
         return policy, value

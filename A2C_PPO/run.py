@@ -14,12 +14,11 @@ from queue import Queue
 
 @click.command()
 @click.option('--env_name', type=str, default='CartPole-v1')
-@click.option('--num_workers', type=int, default=1)
-@click.option('--max_episodes', type=int, default=100)
-@click.option('--timesteps_per_episode', type=int, default=400)
-@click.option('--timesteps_per_rollout', type=int, default=50)
-@click.option('--epochs_per_rollout', type=int, default=5)
-@click.option('--learning_rate', type=float, default=10e-4)
+@click.option('--num_workers', type=int, default=16)
+@click.option('--max_episodes', type=int, default=1000)
+@click.option('--timesteps_per_rollout', type=int, default=100)
+@click.option('--epochs_per_rollout', type=int, default=10)
+@click.option('--learning_rate', type=float, default=10e-5)
 @click.option('--entropy_coefficient', type=float, default=0.01)
 @click.option('--norm_clip_value', type=float, default=None)
 @click.option('--num_checkpoints', type=int, default=10)
@@ -33,7 +32,6 @@ def run_training(
         env_name,
         num_workers,
         max_episodes,
-        timesteps_per_episode,
         timesteps_per_rollout,
         epochs_per_rollout,
         learning_rate,
@@ -47,6 +45,7 @@ def run_training(
         random_seed,
         save):
     env = gym.make(env_name)
+    timesteps_per_episode = env._max_episode_steps
     state_space = env.observation_space.shape[0]
     action_space = env.action_space.n
 
@@ -97,6 +96,12 @@ def run_training(
 
     end_time = time()
     time_taken = end_time - start_time
+
+    np.save(os.path.join(model_directory, "global_return.npy"), coordinator.smoothed_reward)
+    plt.plot(coordinator.smoothed_reward)
+    plt.ylabel('Moving average reward')
+    plt.xlabel('Episode')
+    plt.savefig(os.path.join(model_directory, 'Moving_Average.png'))
 
     if save:
         write_summary(model_directory,
